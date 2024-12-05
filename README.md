@@ -51,16 +51,227 @@ Los scripts de aprovisionamiento configuran el software y las configuraciones ne
 Configura Apache como balanceador de carga con módulos proxy.
 ![balanceador sh 1](https://github.com/user-attachments/assets/92ee8d15-f6f9-4204-b26d-5f693211bc6e)
 
+#### Actualización del sistema y instalación de Apache:
+
+```console
+apt update -y
+apt install -y apache2
+```
+- Actualiza la lista de paquetes e instala Apache.
+
+#### Habilitación de módulos de Apache:
+
+```console
+a2enmod proxy
+a2enmod proxy_http
+a2enmod proxy_balancer
+a2enmod lbmethod_byrequests
+```
+- Activa los módulos necesarios para el balanceo de carga:
+ - `proxy`: Permite que Apache actúe como un proxy inverso.
+ - `proxy_http`: Habilita el soporte para proxys sobre HTTP.
+ - `proxy_balancer`: Permite definir clústeres de servidores para balanceo.
+ - `lbmethod_byrequests`: Distribuye las solicitudes en función del número de peticiones por servidor.
+
+#### Configuración del balanceador:
+
+- Se copia el archivo de configuración predeterminado:
+```console
+cp /etc/apache2/sites-available/000-default.conf /etc/apache2/sites-available/load-balancer.conf
+```
+
+- Se comenta la línea del `DocumentRoot`:
+```console
+sed -i '/DocumentRoot \/var\/www\/html/s/^/#/' /etc/apache2/sites-available/load-balancer.conf
+```
+
+#### Definición del clúster de balanceo:
+
+-Se agrega la configuración del clúster de servidores al archivo `load-balancer.conf`:
+
+```console
+sed -i '/:warn/ a \<Proxy balancer://mycluster>\n    # Server 1\n    BalancerMember http://192.168.30.20\n    # Server 2\n    BalancerMember http://192.168.30.30\n</Proxy>\n#todas las peticiones las envía al siguiente balanceador\nProxyPass / balancer://mycluster/' /etc/apache2/sites-available/load-balancer.conf
+```
+
+- Define un clúster llamado `mycluster` con dos servidores (`192.168.30.20` y `192.168.30.30`).
+- Redirige todas las peticiones al clúster mediante `ProxyPass`.
+
+#### Habilitación de la configuración y reinicio del servicio:
+```console
+a2ensite load-balancer.conf
+a2dissite 000-default.conf
+systemctl restart apache2
+systemctl reload apache2
+```
+
+
+
 ### 2. Servidor NFS (nfs.sh)
 Configura NFS para compartir el contenido de WordPress.
 ![nfs sh 1](https://github.com/user-attachments/assets/1b116d0c-83c7-445c-9287-2b40bbd63de0)
 
+#### Actualización del sistema y instalación de Apache:
 
+```console
+apt update -y
+apt install nfs-kernel-server -y
+apt install unzip -y
+apt install curl -y
+apt install php php-mysql -y
+apt install mysql-client -y
+```
+- **nfs-kernel-server**: Instala el servidor NFS.
+- **unzip y curl**: Utilizados para descargar y extraer WordPress.
+- **php y php-mysql**: Proporcionan soporte para ejecutar WordPress.
+- **mysql-client**: Permite conectarse a una base de datos remota.
+
+#### Creación y configuración del directorio compartido:
+```console
+mkdir /var/nfs/shared -p
+chown -R nobody:nogroup /var/nfs/shared
+```
+
+- Crea el directorio `/var/nfs/shared` y lo asigna al usuario/grupo nobody:nogroup, que es una práctica común para recursos compartidos.
+
+#### Exportación del directorio NFS:
+ ```console
+ sed -i '$a /var/nfs/shared    192.168.30.20(rw,sync,no_subtree_check)' /etc/exports
+ sed -i '$a /var/nfs/shared    192.168.30.30(rw,sync,no_subtree_check)' /etc/exports
+```
+- Añade entradas al archivo `/etc/exports` para permitir que los servidores `192.168.30.20` y `192.168.30.30` accedan al directorio con permisos de lectura/escritura (`rw`).
+- **sync**: Asegura que los cambios se escriben en el disco antes de responder al cliente.
+- **no_subtree_check**: Mejora el rendimiento y evita problemas con ciertos tipos de configuraciones.
+
+#### Descarga y configuración de WordPress:
+```console
+curl -O https://wordpress.org/latest.zip
+unzip -o latest.zip -d /var/nfs/shared/
+chmod 755 -R /var/nfs/shared/
+chown -R www-data:www-data /var/nfs/shared/*
+```
+
+- Descarga y descomprime WordPress en el directorio compartido.
+- Cambia permisos y asigna el contenido a `www-data`, el usuario estándar de Apache para ejecutar sitios web.
+
+#### Reinicio del servicio NFS:
+```console
+systemctl restart nfs-kernel-server
+```
+
+- Reinicia el servidor NFS para aplicar los cambios.
+
+### 3. Webservers (webservers.sh)
+
+#### Actualización e instalación de paquetes:
+```console
+apt update -y
+apt install apache2 -y
+apt install nfs-common -y
+apt install php libapache2-mod-php php-mysql php-curl php-gd php-xml php-mbstring php-xmlrpc php-zip php-soap php -y
+a2enmod rewrite
+```
+
+- **apache2**: Instala el servidor web.
+- **nfs-common**: Permite a los servidores web acceder a recursos NFS.
+- **php y módulos**: Instala PHP y extensiones necesarias para WordPress.
+- **rewrite**: Habilita el módulo de reescritura de URLs en Apache.
+
+#### Configuración de Apache:
+```console
+sudo sed -i 's|DocumentRoot .*|DocumentRoot /nfs/shared/wordpress|g' /etc/apache2/sites-available/000-default.conf
+```
+
+- Cambia el directorio raíz de Apache a `/nfs/shared/wordpress`, donde estará WordPress montado desde el servidor NFS.
+
+#### Permisos de acceso:
+```console
+sed -i '/<\/VirtualHost>/i \
+<Directory /nfs/shared/wordpress>\
+    Options Indexes FollowSymLinks\
+    AllowOverride All\
+    Require all granted\
+</Directory>' /etc/apache2/sites-available/000-default.conf
+```
+
+- Agrega una configuración para permitir el acceso y habilitar .htaccess en el directorio compartido.
+
+#### Creación de una nueva configuración de sitio:
+```console
+cp /etc/apache2/sites-available/000-default.conf /etc/apache2/sites-available/websv.conf
+```
+#### Montaje del directorio NFS:
+```console
+mkdir -p /nfs/shared
+mount 192.168.30.28:/var/nfs/shared /nfs/shared
+```
+
+- Crea el directorio `/nfs/shared` y monta el recurso compartido desde el servidor NFS (`192.168.30.28`).
+
+  #### Automatización del montaje:
+```console
+echo "192.168.30.28:/var/nfs/general /nfs/general nfs auto,nofail,noatime,nolock,intr,tcp,actimeo=1800 0 0" | sudo tee -a /etc/fstab
+mount -a
+```
+
+- Añade la configuración al archivo `/etc/fstab` para montar automáticamente el recurso NFS al iniciar el sistema.
+
+#### Activación del nuevo sitio y reinicio de Apache:
+```console
+a2dissite 000-default.conf
+a2ensite websv.conf
+systemctl restart apache2
+systemctl reload apache2
+systemctl status apache2
+```
+- Desactiva el sitio por defecto, activa la nueva configuración y reinicia Apache para aplicar los cambios.
+
+### 4. SGBD (sgbd.sh)
+Este script configura un servidor MySQL, crea una base de datos y un usuario con privilegios específicos para acceder desde una red.
+![sgbd sh1](https://github.com/user-attachments/assets/5df7f7ab-ca23-463f-adc7-0460148c3f69)
+
+#### Instalación de MySQL:
+```console
+apt install mysql-server -y
+apt update -y
+apt install -y mysql-server
+```
+
+- Instala el servidor MySQL y actualiza los paquetes disponibles.
+
+#### Configuración de MySQL para permitir conexiones remotas:
+```console
+sed -i "s/^bind-address\s*=.*/bind-address = 192.168.30.42/" /etc/mysql/mysql.conf.d/mysqld.cnf
+```
+
+- Modifica el archivo de configuración de MySQL (`mysqld.cnf`) para cambiar la dirección de enlace (`bind-address`) a `192.168.30.42`, lo que permite conexiones desde esa dirección específica.
+
+#### Reinicio del servicio MySQL:
+```console
+sudo systemctl restart mysql
+```
+- Reinicia el servicio para aplicar los cambios en la configuración.
+
+#### Creación de base de datos y usuario:
+```console
+mysql <<EOF
+CREATE DATABASE db_wordpress;
+CREATE USER 'david'@'192.168.30.%' IDENTIFIED BY 'S1234';
+GRANT ALL PRIVILEGES ON db_wordpress.* TO 'david'@'192.168.30.%';
+FLUSH PRIVILEGES;
+EOF
+```
+
+- `CREATE DATABASE db_wordpress;`: Crea una base de datos llamada db_wordpress.
+- `CREATE USER 'david'@'192.168.30.%' IDENTIFIED BY 'S1234';`: Crea un usuario david con acceso permitido desde cualquier host en la subred 192.168.30.% y le asigna la contraseña S1234.
+- `GRANT ALL PRIVILEGES ON db_wordpress.* TO 'david'@'192.168.30.%';`: Otorga al usuario david todos los privilegios sobre la base de datos db_wordpress.
+- `FLUSH PRIVILEGES;`: Recarga los privilegios para que los cambios surtan efecto inmediatamente.
 
 ## Resultado
-A través de un navegador, nos conectaremos a nuestra aplicación poniendo hhtp://localhost:8080
+A través de un navegador, nos conectaremos a nuestra aplicación poniendo https://wordpressdavidsc.myddns.me/
 
-![Lamp](https://github.com/user-attachments/assets/a449bc02-9a7a-408d-86ed-01009820aaef)
+![La pagina funciona 2, diossssssss](https://github.com/user-attachments/assets/ced468e1-6d1a-4792-8121-626358fcc6bd)
+
+
 
 Para ver que está completamente funcional, crearemos un usuario.
 
