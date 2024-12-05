@@ -161,6 +161,7 @@ systemctl restart nfs-kernel-server
 - Reinicia el servidor NFS para aplicar los cambios.
 
 ### 3. Webservers (webservers.sh)
+![webservers sh1](https://github.com/user-attachments/assets/0cd06dff-ff3a-40ea-966a-4f2725c43da5)
 
 #### Actualización e instalación de paquetes:
 ```console
@@ -266,30 +267,82 @@ EOF
 - `GRANT ALL PRIVILEGES ON db_wordpress.* TO 'david'@'192.168.30.%';`: Otorga al usuario david todos los privilegios sobre la base de datos db_wordpress.
 - `FLUSH PRIVILEGES;`: Recarga los privilegios para que los cambios surtan efecto inmediatamente.
 
+## Pasos para Configurar la Infraestructura en AWS
+### 1. Crear una VPC personalizada
+
+- Navega a VPC > Crear VPC.
+- Selecciona “VPC con subredes públicas y privadas” y define un rango CIDR (`10.0.0.0/16`), en mi caso (`192.168.30.0/24`).
+![vpc](https://github.com/user-attachments/assets/eddb5844-e03b-4a8b-b8cd-d41ab8756d28)
+
+
+### 2. Crear Subredes
+
+- Crea una subred pública (`10.0.1.0/24`) para el balanceador, en mi caso (`192.168.30.0/28`).
+ ![subred publica](https://github.com/user-attachments/assets/3a37da70-24c9-4277-aab5-91cb266bb990)
+
+- Crea dos subredes privadas (`10.0.2.0/24` y `10.0.3.0/24`) para los servidores backend y la base de datos, en este caso para la red-interna1 donde se alojan los webservers y el nfs (`192.168.30.16/28`) y para la red-interna2 con la base de datos (192.168.30.32/28).
+![image](https://github.com/user-attachments/assets/3e1ac01e-9a94-4e9c-baca-925b3e42b84f)
+![red interna 2](https://github.com/user-attachments/assets/17439123-b7fa-4723-8a59-98c54e88d504)
+
+## 3. Configurar el Internet Gateway 
+
+- Enlaza un Internet Gateway a la VPC.
+![puerta de enlace internet](https://github.com/user-attachments/assets/c5b88b8e-6598-4d75-acbc-61a48052afa6)
+
+## 4. Configurar Tablas de Enrutamiento
+
+- Asocia la subred pública a una tabla de enrutamiento pública con una ruta hacia el Internet Gateway.
+ ![rutas publicas](https://github.com/user-attachments/assets/e103a1c7-249a-4e1a-b96b-ef3698c89389)
+
+- Asocia las subredes privadas a una tabla de enrutamiento privada con una ruta hacia el NAT Gateway.
+![rutas privadas](https://github.com/user-attachments/assets/e3898f47-38a9-4053-a198-c0c933bf4608)
+
+## 5. Crear Grupos de Seguridad
+
+- **Balanceador**: Permitir tráfico HTTP/HTTPS y SSH desde cualquier origen.
+![reglas entrada balanceador](https://github.com/user-attachments/assets/757ed1e2-49c7-40b8-9a1d-0a61247618cc)
+
+- **Backend**: Permitir tráfico HTTP desde el balanceador y acceso NFS desde el servidor NFS.
+![reglas entrada webservers](https://github.com/user-attachments/assets/c5d91758-1948-4ac9-ae2d-f2a5653c60b8)
+
+- **NFS**: Permitir conexiones NFS desde los servidores backend.
+![reglas entrada nfs](https://github.com/user-attachments/assets/839b7c90-f38c-4f16-904a-6ae2f5fe8198)
+
+- **Base de Datos**: Permitir tráfico MySQL desde los servidores backend.
+![reglas de entrada sgbd](https://github.com/user-attachments/assets/f2b3bfdd-9133-44ea-bee1-ec8515a9cc74)
+
+## 6. Crear Instancias EC2
+
+- Balanceador en la subred pública.
+- Web servers y NFS en la subred privada 1.
+- Base de datos en la subred privada 2.
+
+## 7. Asignar IP Elástica al Balanceador
+
+- Reserva una IP elástica y asígnala a la instancia del balanceador.
+![ip elastica](https://github.com/user-attachments/assets/c292bf34-41ba-4491-b5be-87fbe41d3c72)
+
+  
 ## Resultado
 A través de un navegador, nos conectaremos a nuestra aplicación poniendo https://wordpressdavidsc.myddns.me/
+![pagina https](https://github.com/user-attachments/assets/a84c4ccc-029d-45fa-ae28-e52e8929b3b7)
 
-![La pagina funciona 2, diossssssss](https://github.com/user-attachments/assets/ced468e1-6d1a-4792-8121-626358fcc6bd)
+También se podría acceder desde http://wordpressdavidsc.myddns.me/
+![pagina http](https://github.com/user-attachments/assets/d4987fef-e303-4b4e-946a-329e0a9ea1c9)
 
+##  Despliegue
+- **Aprovisionar infraestructura en AWS** siguiendo los pasos anteriores.
+- **Conectar vía SSH** a cada instancia y ejecutar los scripts de aprovisionamiento.
 
-
-Para ver que está completamente funcional, crearemos un usuario.
-
-![creacion usuario](https://github.com/user-attachments/assets/41fa999a-f09c-4c23-ac4a-f27124be29fb)
-![usuario creado](https://github.com/user-attachments/assets/5bd57349-4953-43ab-a4a3-2a7a8f26f505)
-
-Comprobaremos en nuestra base de datos que el usuario creado se ha añadido.
-
-![pablo](https://github.com/user-attachments/assets/1253ecff-73e9-41ae-80a7-5429a853f80c)
-
-## Como usar el proyecto
--**Clonar el proyecto**
-
--**Ejecutar vagrant up --provision para crear las máquinas y configurarlas**
-
--**Accede al servidor Apache a través de http://localhost:8080**
-
--**Usar la aplicación**
+```console
+./balanceador.sh
+./nfs.sh
+./webservers.sh
+./sgbd.sh
+```
+- **Acceder a WordPress** utilizando el dominio apuntado a la IP elástica del balanceador.
 
 ## Conclusión
-Este proyecto en Vagrant proporciona una estructura para desplegar una pila LAMP en dos niveles, una VM dedicada a servidor web y otra con la base de datos, que simula un entorno real para pruebas o desarrollo.
+Este proyecto implementa un sitio WordPress en AWS siguiendo una arquitectura de tres capas para asegurar alta disponibilidad, escalabilidad y seguridad. El balanceador de carga distribuye el tráfico hacia los servidores backend, que comparten recursos mediante NFS, mientras que la base de datos está protegida en una red privada.
+
+La automatización mediante scripts garantiza un despliegue rápido y consistente, reduciendo errores y facilitando futuras actualizaciones. En conjunto, la solución ofrece un entorno web robusto y preparado para escalar según la demanda.
